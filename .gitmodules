@@ -1,0 +1,4 @@
+[submodule "dependencies/cutlass"]
+	path = dependencies/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
+	branch = master
