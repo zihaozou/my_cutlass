@@ -11,7 +11,7 @@
 #include "cutlass/util/host_tensor.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/device_memory.h"
-
+#include "cutlass/util/device_nhwc_padding.h"
 #define CUTLASS_CHECK(status)                                                                          \
     {                                                                                                  \
         cutlass::Status error = status;                                                                \
@@ -151,23 +151,52 @@ void conv_forward(cutlass::HostTensor<TypeA, LayoutA> &tensorA, cutlass::HostTen
     static_assert(std::is_same<TypeC, TypeD>::value, "Type of matrix C and D must be equal");
     static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout of matrix C and D must be equal");
 
-    cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
-    if (tensorA.extent().c() <= 2)
+    if (tensorA.extent().c() == 1)
     {
         using conv2 = Conv2ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+        cutlass::Tensor4DCoord padded_dim(tensorA.extent().n(), tensorA.extent().h(), tensorA.extent().w(), 2);
+        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded(padded_dim);
+        cutlass::nhwc_padding(tensorA.extent(), padded_dim, tensorA.device_ref(), tensor_a_padded.device_ref(), nullptr);
+        cudaDeviceSynchronize();
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
+        typename conv2::Arguments args(problem_size, tensor_a_padded.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        conv_forward_impl<conv2>(args);
+    }
+    else if (tensorA.extent().c() == 2)
+    {
+        using conv2 = Conv2ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+        cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
         typename conv2::Arguments args(problem_size, tensorA.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
         conv_forward_impl<conv2>(args);
     }
-    else if (tensorA.extent().c() <= 4 && tensorA.extent().c() > 2)
+    else if (tensorA.extent().c() == 3)
     {
         using conv4 = Conv4ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+        cutlass::Tensor4DCoord padded_dim(tensorA.extent().n(), tensorA.extent().h(), tensorA.extent().w(), 4);
+        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded(padded_dim);
+        cutlass::nhwc_padding(tensorA.extent(), padded_dim, tensorA.device_ref(), tensor_a_padded.device_ref(), nullptr);
+        cudaDeviceSynchronize();
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
+        typename conv4::Arguments args(problem_size, tensor_a_padded.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        conv_forward_impl<conv4>(args);
+    }
+    else if (tensorA.extent().c() == 4)
+    {
+        using conv4 = Conv4ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+        cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
         typename conv4::Arguments args(problem_size, tensorA.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
         conv_forward_impl<conv4>(args);
     }
-    else
+    else if (tensorA.extent().c() % 8 == 0)
     {
         using conv = ConvChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+        cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
         typename conv::Arguments args(problem_size, tensorA.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
         conv_forward_impl<conv>(args);
+    }
+    else
+    {
+        std::cerr << "Unsupported input channel number" << std::endl;
+        exit(EXIT_FAILURE);
     }
 }
