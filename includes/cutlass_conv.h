@@ -78,9 +78,10 @@ template <typename Config>
 using SwizzleThreadBlock = std::conditional_t<
     std::is_same<Config, TBWarpSplitKShape>::value, cutlass::gemm::threadblock::GemmSplitKIdentityThreadblockSwizzle<>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>>;
 
-template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, int alignment>
-using ConvNChanforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
-    TypeA, LayoutA,
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, int InputAlignment, int OutputAlignment>
+using ConvNtoMforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
+    TypeA,
+    LayoutA,
     TypeB, LayoutB,
     TypeC, LayoutC,
     TypeAccumulator,
@@ -91,44 +92,33 @@ using ConvNChanforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFpro
     ShapeMMAOp<TypeA>,
     cutlass::epilogue::thread::LinearCombination<
         TypeC,
-        128 / cutlass::sizeof_bits<TypeC>::value,
+        OutputAlignment,
         TypeAccumulator,
         TypeCompute>,
     SwizzleThreadBlock<TBWarpShapeConfig>,
     2,
     cutlass::arch::OpMultiplyAdd,
-    cutlass::conv::IteratorAlgorithm::kFixedChannels,
+    (InputAlignment % 8) ? cutlass::conv::IteratorAlgorithm::kFixedChannels : cutlass::conv::IteratorAlgorithm::kOptimized,
     cutlass::conv::StrideSupport::kStrided,
-    alignment, alignment>::Kernel;
-
+    InputAlignment, InputAlignment>::Kernel;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv4ChanForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNChanforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4>>;
-
+using Conv2to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv2ChanForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNChanforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2>>;
-
+using Conv2to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using ConvforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
-    TypeA, LayoutA,
-    TypeB, LayoutB,
-    TypeC, LayoutC,
-    TypeAccumulator,
-    MMAOp<TypeA>,
-    SmArch,
-    typename TBWarpShapeConfig::kThreadBlock,
-    typename TBWarpShapeConfig::kWarp,
-    ShapeMMAOp<TypeA>,
-    cutlass::epilogue::thread::LinearCombination<
-        TypeC,
-        128 / cutlass::sizeof_bits<TypeC>::value,
-        TypeAccumulator,
-        TypeCompute>,
-    SwizzleThreadBlock<TBWarpShapeConfig>,
-    2,
-    cutlass::arch::OpMultiplyAdd,
-    cutlass::conv::IteratorAlgorithm::kOptimized>::Kernel;
+using Conv2to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using ConvForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig>>;
+using Conv4to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv4to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv4to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv8to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv8to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv8to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 
 template <class Conv>
 void ConvForwardImpl(const typename Conv::Arguments &args, cudaStream_t stream = nullptr)
@@ -158,51 +148,4 @@ void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTen
     static_assert(std::is_same<TypeA, TypeB>::value, "Type of matrix A and B must be equal");
     static_assert(std::is_same<TypeC, TypeD>::value, "Type of matrix C and D must be equal");
     static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout of matrix C and D must be equal");
-
-    if (tensor_a.extent().c() == 1)
-    {
-        using conv2 = Conv2ChanForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded = PadChannel(tensor_a, 2);
-        cutlass::HostTensor<TypeB, LayoutB> tensor_b_padded = PadChannel(tensor_b, 2);
-        cudaDeviceSynchronize();
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensor_b_padded.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
-        typename conv2::Arguments args(problem_size, tensor_a_padded.device_ref(), tensor_b_padded.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        ConvForwardImpl<conv2>(args);
-    }
-    else if (tensor_a.extent().c() == 2)
-    {
-        using conv2 = Conv2ChanForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a.extent(), tensor_b.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
-        typename conv2::Arguments args(problem_size, tensor_a.device_ref(), tensor_b.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        ConvForwardImpl<conv2>(args);
-    }
-    else if (tensor_a.extent().c() == 3)
-    {
-        using conv4 = Conv4ChanForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded = PadChannel(tensor_a, 4);
-        cutlass::HostTensor<TypeB, LayoutB> tensor_b_padded = PadChannel(tensor_b, 4);
-        cudaDeviceSynchronize();
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensor_b_padded.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
-        typename conv4::Arguments args(problem_size, tensor_a_padded.device_ref(), tensor_b_padded.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        ConvForwardImpl<conv4>(args);
-    }
-    else if (tensor_a.extent().c() == 4)
-    {
-        using conv4 = Conv4ChanForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a.extent(), tensor_b.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
-        typename conv4::Arguments args(problem_size, tensor_a.device_ref(), tensor_b.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        ConvForwardImpl<conv4>(args);
-    }
-    else if (tensor_a.extent().c() % 8 == 0)
-    {
-        using conv = ConvForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a.extent(), tensor_b.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
-        typename conv::Arguments args(problem_size, tensor_a.device_ref(), tensor_b.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        ConvForwardImpl<conv>(args);
-    }
-    else
-    {
-        std::cerr << "Unsupported input channel number" << std::endl;
-        exit(EXIT_FAILURE);
-    }
 }
