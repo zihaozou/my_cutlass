@@ -30,7 +30,7 @@ TEST(ConvTest, ConvolutionFoward_2to32)
     tensor_input.sync_device();
     tensor_filter.sync_device();
     tensor_output.sync_device();
-    conv_forward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
+    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
     cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
@@ -58,7 +58,7 @@ TEST(ConvTest, ConvolutionFoward_4to32)
     tensor_input.sync_device();
     tensor_filter.sync_device();
     tensor_output.sync_device();
-    conv_forward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
+    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
     cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
@@ -85,7 +85,7 @@ TEST(ConvTest, ConvolutionFoward_1to32)
     tensor_input.sync_device();
     tensor_filter.sync_device();
     tensor_output.sync_device();
-    conv_forward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
+    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
     cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();

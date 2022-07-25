@@ -41,8 +41,8 @@ using SmArch = std::conditional_t<MY_CUTLASS_MIN_GPU_ARCH >= 80,
                                                      cutlass::arch::Sm80>,
                                   std::conditional_t<MY_CUTLASS_MIN_GPU_ARCH >= 75,
                                                      cutlass::arch::Sm75, cutlass::arch::Sm70>>;
-using TypeAccumulator = std::conditional_t<std::is_same<Precision_t, float>::value, float, cutlass::half_t>;
-using TypeCompute = std::conditional_t<std::is_same<Precision_t, float>::value, float, cutlass::half_t>;
+using TypeAccumulator = std::conditional_t<std::is_same<SmArch, cutlass::arch::Sm80>::value, cutlass::half_t, float>;
+using TypeCompute = std::conditional_t<std::is_same<SmArch, cutlass::arch::Sm80>::value, cutlass::half_t, float>;
 
 template <typename T>
 using MMAOp = typename std::conditional < std::is_same<T, float>::value ||
@@ -108,7 +108,7 @@ template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, type
 using Conv2ChanForward = cutlass::conv::device::ImplicitGemmConvolution<ConvNChanforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using ConvChanforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
+using ConvforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
     TypeA, LayoutA,
     TypeB, LayoutB,
     TypeC, LayoutC,
@@ -128,10 +128,10 @@ using ConvChanforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop
     cutlass::arch::OpMultiplyAdd,
     cutlass::conv::IteratorAlgorithm::kOptimized>::Kernel;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using ConvChanForward = cutlass::conv::device::ImplicitGemmConvolution<ConvChanforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig>>;
+using ConvForward = cutlass::conv::device::ImplicitGemmConvolution<ConvforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig>>;
 
 template <class Conv>
-void conv_forward_impl(const typename Conv::Arguments &args)
+void ConvForwardImpl(const typename Conv::Arguments &args, cudaStream_t stream = nullptr)
 {
     Conv convOp;
     size_t workspace_size = convOp.get_workspace_size(args);
@@ -140,59 +140,65 @@ void conv_forward_impl(const typename Conv::Arguments &args)
     CUTLASS_CHECK(status);
     status = convOp.initialize(args, workspace.get());
     CUTLASS_CHECK(status);
-    status = convOp();
+    status = convOp(stream);
     CUTLASS_CHECK(status);
+}
+template <typename Type, typename Layout>
+cutlass::HostTensor<Type, Layout> PadChannel(cutlass::HostTensor<Type, Layout> &src, int pad_channels, cudaStream_t stream = nullptr)
+{
+    cutlass::Tensor4DCoord padded_dim(src.extent().n(), src.extent().h(), src.extent().w(), pad_channels);
+    cutlass::HostTensor<Type, Layout> padded(padded_dim);
+    cutlass::nhwc_padding(src.extent(), padded_dim, src.device_ref(), padded.device_ref(), stream);
+    return padded;
 }
 
 template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
-void conv_forward(cutlass::HostTensor<TypeA, LayoutA> &tensorA, cutlass::HostTensor<TypeB, LayoutB> &tensorB, cutlass::HostTensor<TypeC, LayoutC> &tensorC, cutlass::HostTensor<TypeD, LayoutD> &tensorD, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &convStride, cutlass::MatrixCoord &convDilation)
+void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation)
 {
     static_assert(std::is_same<TypeA, TypeB>::value, "Type of matrix A and B must be equal");
     static_assert(std::is_same<TypeC, TypeD>::value, "Type of matrix C and D must be equal");
     static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout of matrix C and D must be equal");
 
-    if (tensorA.extent().c() == 1)
+    if (tensor_a.extent().c() == 1)
     {
         using conv2 = Conv2ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::Tensor4DCoord padded_dim(tensorA.extent().n(), tensorA.extent().h(), tensorA.extent().w(), 2);
-        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded(padded_dim);
-        cutlass::nhwc_padding(tensorA.extent(), padded_dim, tensorA.device_ref(), tensor_a_padded.device_ref(), nullptr);
+        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded = PadChannel(tensor_a, 2);
+        cutlass::HostTensor<TypeB, LayoutB> tensor_b_padded = PadChannel(tensor_b, 2);
         cudaDeviceSynchronize();
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
-        typename conv2::Arguments args(problem_size, tensor_a_padded.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        conv_forward_impl<conv2>(args);
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensor_b_padded.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
+        typename conv2::Arguments args(problem_size, tensor_a_padded.device_ref(), tensor_b_padded.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        ConvForwardImpl<conv2>(args);
     }
-    else if (tensorA.extent().c() == 2)
+    else if (tensor_a.extent().c() == 2)
     {
         using conv2 = Conv2ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
-        typename conv2::Arguments args(problem_size, tensorA.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        conv_forward_impl<conv2>(args);
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a.extent(), tensor_b.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
+        typename conv2::Arguments args(problem_size, tensor_a.device_ref(), tensor_b.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        ConvForwardImpl<conv2>(args);
     }
-    else if (tensorA.extent().c() == 3)
+    else if (tensor_a.extent().c() == 3)
     {
         using conv4 = Conv4ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::Tensor4DCoord padded_dim(tensorA.extent().n(), tensorA.extent().h(), tensorA.extent().w(), 4);
-        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded(padded_dim);
-        cutlass::nhwc_padding(tensorA.extent(), padded_dim, tensorA.device_ref(), tensor_a_padded.device_ref(), nullptr);
+        cutlass::HostTensor<TypeA, LayoutA> tensor_a_padded = PadChannel(tensor_a, 4);
+        cutlass::HostTensor<TypeB, LayoutB> tensor_b_padded = PadChannel(tensor_b, 4);
         cudaDeviceSynchronize();
-        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
-        typename conv4::Arguments args(problem_size, tensor_a_padded.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        conv_forward_impl<conv4>(args);
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a_padded.extent(), tensor_b_padded.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
+        typename conv4::Arguments args(problem_size, tensor_a_padded.device_ref(), tensor_b_padded.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        ConvForwardImpl<conv4>(args);
     }
-    else if (tensorA.extent().c() == 4)
+    else if (tensor_a.extent().c() == 4)
     {
         using conv4 = Conv4ChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
-        typename conv4::Arguments args(problem_size, tensorA.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        conv_forward_impl<conv4>(args);
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a.extent(), tensor_b.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
+        typename conv4::Arguments args(problem_size, tensor_a.device_ref(), tensor_b.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        ConvForwardImpl<conv4>(args);
     }
-    else if (tensorA.extent().c() % 8 == 0)
+    else if (tensor_a.extent().c() % 8 == 0)
     {
-        using conv = ConvChanForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-        cutlass::conv::Conv2dProblemSize problem_size(tensorA.extent(), tensorB.extent(), padding, convStride, convDilation, tensorD.extent(), mode, 1);
-        typename conv::Arguments args(problem_size, tensorA.device_ref(), tensorB.device_ref(), tensorC.device_ref(), tensorD.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
-        conv_forward_impl<conv>(args);
+        using conv = ConvForward<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+        cutlass::conv::Conv2dProblemSize problem_size(tensor_a.extent(), tensor_b.extent(), padding, conv_stride, conv_dilation, tensor_d.extent(), mode, 1);
+        typename conv::Arguments args(problem_size, tensor_a.device_ref(), tensor_b.device_ref(), tensor_c.device_ref(), tensor_d.device_ref(), {TypeCompute(1.0), TypeCompute(0.0)});
+        ConvForwardImpl<conv>(args);
     }
     else
     {

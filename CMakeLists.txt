@@ -103,4 +103,5 @@ target_link_libraries(
 
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
+
 # target_link_libraries(main PUBLIC ${CUDA_LIBRARIES})
