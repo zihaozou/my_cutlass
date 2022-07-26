@@ -78,14 +78,13 @@ include_directories("dependencies/cutlass/tools/util/include")
 include_directories("dependencies/cutlass/examples/common")
 set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library" FORCE)
 add_subdirectory("dependencies/cutlass")
-include_directories("dependencies/patterns/include")
-add_subdirectory("dependencies/patterns")
+
 
 include_directories("includes")
 set(MY_CUTLASS_SOURCES sources/cutlass_conv.cu)
 
 add_library(my_cutlass STATIC ${MY_CUTLASS_SOURCES})
-target_link_libraries(my_cutlass PUBLIC mpark_patterns)
+
 target_compile_definitions(my_cutlass PUBLIC ${MY_CUTLASS_DEFINITIONS})
 target_compile_options(my_cutlass PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_NVCC_FLAGS}>)
 # add_executable(main main.cu)

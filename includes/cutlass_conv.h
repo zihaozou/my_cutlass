@@ -15,7 +15,6 @@
 #include "cutlass/util/device_nhwc_padding.h"
 #include "cutlass/reduction/device/reduce_split_k.h"
 #include "cutlass/reduction/thread/reduction_operators.h"
-#include <mpark/patterns.hpp>
 
 #define CUTLASS_CHECK(status)                                                                          \
     {                                                                                                  \
@@ -125,6 +124,15 @@ using Conv8to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNto
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
 using Conv8to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 
+template <typename Type, typename Layout>
+cutlass::HostTensor<Type, Layout> PadChannel(cutlass::HostTensor<Type, Layout> &src, int pad_channels, cudaStream_t stream = nullptr)
+{
+    cutlass::Tensor4DCoord padded_dim(src.extent().n(), src.extent().h(), src.extent().w(), pad_channels);
+    cutlass::HostTensor<Type, Layout> padded(padded_dim);
+    cutlass::nhwc_padding(src.extent(), padded_dim, src.device_ref(), padded.device_ref(), stream);
+    return padded;
+}
+
 template <typename Conv, typename TypeC, typename LayoutC, typename TypeD, typename LayoutD>
 void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cudaStream_t stream = nullptr)
 {
@@ -175,15 +183,6 @@ void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC
         CUTLASS_CHECK(status);
         status = reduction_op(stream);
     }
-}
-
-template <typename Type, typename Layout>
-cutlass::HostTensor<Type, Layout> PadChannel(cutlass::HostTensor<Type, Layout> &src, int pad_channels, cudaStream_t stream = nullptr)
-{
-    cutlass::Tensor4DCoord padded_dim(src.extent().n(), src.extent().h(), src.extent().w(), pad_channels);
-    cutlass::HostTensor<Type, Layout> padded(padded_dim);
-    cutlass::nhwc_padding(src.extent(), padded_dim, src.device_ref(), padded.device_ref(), stream);
-    return padded;
 }
 
 #define CHECK_CHANNEL_(c) ((c) % 8 == 0) ? 0 : (((c) == 4) ? 1 : (((c) == 2) ? 2 : 3))

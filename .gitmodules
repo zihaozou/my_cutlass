@@ -2,7 +2,3 @@
 	path = dependencies/cutlass
 	url = https://github.com/NVIDIA/cutlass.git
 	branch = master
-[submodule "dependencies/patterns"]
-	path = dependencies/patterns
-	url = https://github.com/mpark/patterns.git
-	branch = master
