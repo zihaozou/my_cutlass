@@ -69,7 +69,7 @@ FetchContent_Declare(
 # For Windows: Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
-
+find_package(benchmark REQUIRED)
 
 
 
@@ -78,12 +78,14 @@ include_directories("dependencies/cutlass/tools/util/include")
 include_directories("dependencies/cutlass/examples/common")
 set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library" FORCE)
 add_subdirectory("dependencies/cutlass")
-
+include_directories("dependencies/patterns/include")
+add_subdirectory("dependencies/patterns")
 
 include_directories("includes")
 set(MY_CUTLASS_SOURCES sources/cutlass_conv.cu)
 
 add_library(my_cutlass STATIC ${MY_CUTLASS_SOURCES})
+target_link_libraries(my_cutlass PUBLIC mpark_patterns)
 target_compile_definitions(my_cutlass PUBLIC ${MY_CUTLASS_DEFINITIONS})
 target_compile_options(my_cutlass PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_NVCC_FLAGS}>)
 # add_executable(main main.cu)
@@ -104,4 +106,10 @@ target_link_libraries(
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
 
+# add_executable(performance benchmarks/benchmark.cu)
+# target_link_libraries(
+#   performance
+#   my_cutlass
+#   benchmark::benchmark
+# )
 # target_link_libraries(main PUBLIC ${CUDA_LIBRARIES})

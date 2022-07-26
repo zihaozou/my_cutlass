@@ -3,6 +3,7 @@
 #include "cutlass/arch/arch.h"
 #include "cutlass/gemm/device/gemm.h"
 #include "cutlass/conv/kernel/default_conv2d_fprop.h"
+#include "cutlass/conv/kernel/default_conv2d_dgrad.h"
 #include "cutlass/conv/device/implicit_gemm_convolution.h"
 #include "cutlass/conv/conv2d_problem_size.h"
 #include "cutlass/conv/convolution.h"
@@ -12,6 +13,10 @@
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/device_nhwc_padding.h"
+#include "cutlass/reduction/device/reduce_split_k.h"
+#include "cutlass/reduction/thread/reduction_operators.h"
+#include <mpark/patterns.hpp>
+
 #define CUTLASS_CHECK(status)                                                                          \
     {                                                                                                  \
         cutlass::Status error = status;                                                                \
@@ -120,9 +125,21 @@ using Conv8to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNto
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
 using Conv8to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 
-template <class Conv>
-void ConvForwardImpl(const typename Conv::Arguments &args, cudaStream_t stream = nullptr)
+template <typename Conv, typename TypeC, typename LayoutC, typename TypeD, typename LayoutD>
+void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cudaStream_t stream = nullptr)
 {
+    using EpilogueOp = typename Conv::EpilogueOutputOp;
+    using ReductionOp = cutlass::reduction::thread::ReduceAdd<
+        TypeAccumulator,
+        typename EpilogueOp::ElementAccumulator,
+        EpilogueOp::kCount>;
+    using ReductionKernel = cutlass::reduction::kernel::ReduceSplitK<
+        cutlass::MatrixShape<4, 32 * EpilogueOp::kCount>,
+        EpilogueOp,
+        ReductionOp>;
+    using ReductionDevice = cutlass::reduction::device::ReduceSplitK<ReductionKernel>;
+    using ReductionStrideIndex = typename ReductionDevice::StrideIndex;
+
     Conv convOp;
     size_t workspace_size = convOp.get_workspace_size(args);
     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
@@ -130,9 +147,36 @@ void ConvForwardImpl(const typename Conv::Arguments &args, cudaStream_t stream =
     CUTLASS_CHECK(status);
     status = convOp.initialize(args, workspace.get());
     CUTLASS_CHECK(status);
+    if (args.split_k_mode == cutlass::conv::SplitKMode::kParallel)
+    {
+        args.ref_D.reset(reinterpret_cast<typename Conv::ElementC *>(workspace.get()));
+        status = convOp.update(args, workspace.get());
+        CUTLASS_CHECK(status);
+    }
+
     status = convOp(stream);
     CUTLASS_CHECK(status);
+    if (args.split_k_mode == cutlass::conv::SplitKMode::kParallel)
+    {
+        ReductionDevice reduction_op;
+        typename ReductionDevice::Arguments reduction_args(
+            cutlass::conv::implicit_gemm_problem_size(Conv::kConvolutionalOperator, args.problem_size).mn(),
+            args.problem_size.split_k_slices,
+            cutlass::conv::implicit_gemm_tensor_c_size(Conv::kConvolutionalOperator, args.problem_size),
+            {reinterpret_cast<TypeAccumulator *>(workspace.get()),
+             ReductionStrideIndex(tensor_c.stride()[Conv::ImplicitGemmKernel::kTensorCStrideIdx])},
+            {tensor_d.device_data(),
+             ReductionStrideIndex(tensor_d.stride()[Conv::ImplicitGemmKernel::kTensorCStrideIdx])},
+            {tensor_c.device_data(),
+             ReductionStrideIndex(tensor_c.stride()[Conv::ImplicitGemmKernel::kTensorCStrideIdx])},
+            // apply alpha, beta to obtain the following equation alpha * ReduceAdd(A * B) + beta * C
+            {TypeCompute(1.0), TypeCompute(0.0)});
+        status = reduction_op.initialize(reduction_args);
+        CUTLASS_CHECK(status);
+        status = reduction_op(stream);
+    }
 }
+
 template <typename Type, typename Layout>
 cutlass::HostTensor<Type, Layout> PadChannel(cutlass::HostTensor<Type, Layout> &src, int pad_channels, cudaStream_t stream = nullptr)
 {
@@ -142,10 +186,96 @@ cutlass::HostTensor<Type, Layout> PadChannel(cutlass::HostTensor<Type, Layout> &
     return padded;
 }
 
-template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
-void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation)
+#define CHECK_CHANNEL_(c) ((c) % 8 == 0) ? 0 : (((c) == 4) ? 1 : (((c) == 2) ? 2 : 3))
+#define RUN_CONV_DIFF_CHAN(x)                                                                       \
+    typename Conv##x##F::Arguments args{                                                            \
+        problem_size,                                                                               \
+        tensor_a.device_ref(),                                                                      \
+        tensor_b.device_ref(),                                                                      \
+        tensor_c.device_ref(),                                                                      \
+        tensor_d.device_ref(),                                                                      \
+        {TypeCompute(1), TypeCompute(0)},                                                           \
+        (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
+    ConvImpl<Conv##x##F>(args, tensor_c, tensor_d, stream)
+int i = 1;
+constexpr uint choose_op(uint x, uint y)
 {
-    static_assert(std::is_same<TypeA, TypeB>::value, "Type of matrix A and B must be equal");
-    static_assert(std::is_same<TypeC, TypeD>::value, "Type of matrix C and D must be equal");
-    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout of matrix C and D must be equal");
+    return (1 << (CHECK_CHANNEL_(x) + 4)) | (1 << (CHECK_CHANNEL_(y)));
+}
+
+template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
+void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
+{
+    using Conv22F = Conv2to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv24F = Conv2to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv28F = Conv2to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv42F = Conv4to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv44F = Conv4to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv48F = Conv4to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv82F = Conv8to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv84F = Conv8to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv88F = Conv8to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using namespace mpark::patterns;
+
+    static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
+    static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
+    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
+    cutlass::conv::Conv2dProblemSize problem_size(
+        tensor_a.extent(),
+        tensor_b.extent(),
+        padding,
+        conv_stride,
+        conv_dilation,
+        tensor_d.extent(),
+        mode,
+        split_k);
+
+    switch (choose_op(tensor_b.extent().c(), tensor_b.extent().n()))
+    {
+    case choose_op(8, 8):
+    {
+        RUN_CONV_DIFF_CHAN(88);
+        break;
+    }
+    case choose_op(8, 4):
+    {
+        RUN_CONV_DIFF_CHAN(84);
+        break;
+    }
+    case choose_op(8, 2):
+    {
+        RUN_CONV_DIFF_CHAN(82);
+        break;
+    }
+    case choose_op(4, 8):
+    {
+        RUN_CONV_DIFF_CHAN(48);
+        break;
+    }
+    case choose_op(4, 4):
+    {
+        RUN_CONV_DIFF_CHAN(44);
+        break;
+    }
+    case choose_op(4, 2):
+    {
+        RUN_CONV_DIFF_CHAN(42);
+        break;
+    }
+    case choose_op(2, 8):
+    {
+        RUN_CONV_DIFF_CHAN(28);
+        break;
+    }
+    case choose_op(2, 4):
+    {
+        RUN_CONV_DIFF_CHAN(24);
+        break;
+    }
+    case choose_op(2, 2):
+    {
+        RUN_CONV_DIFF_CHAN(22);
+        break;
+    }
+    }
 }

@@ -65,10 +65,67 @@ TEST(ConvTest, ConvolutionFoward_4to32)
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
     ASSERT_FALSE(passed);
 }
-TEST(ConvTest, ConvolutionFoward_1to32)
+
+TEST(ConvTest, ConvolutionFoward_32to2)
 {
-    cutlass::Tensor4DCoord input_size(1, 256, 256, 1);
-    cutlass::Tensor4DCoord filter_size(32, 3, 3, 1);
+    cutlass::Tensor4DCoord input_size(1, 256, 256, 32);
+    cutlass::Tensor4DCoord filter_size(2, 3, 3, 32);
+    cutlass::Tensor4DCoord output_size(1, 256, 256, 2);
+    cutlass::Tensor4DCoord padding(1, 1, 1, 1);
+    cutlass::MatrixCoord stride(1, 1);
+    cutlass::MatrixCoord dilation(1, 1);
+
+    cutlass::HostTensor<InputType, cutlass::layout::TensorNHWC> tensor_input(input_size);
+    cutlass::HostTensor<FilterType, cutlass::layout::TensorNHWC> tensor_filter(filter_size);
+    cutlass::HostTensor<OutputType, cutlass::layout::TensorNHWC> tensor_output(output_size);
+    cutlass::HostTensor<OutputType, cutlass::layout::TensorNHWC> tensor_output_ref(output_size);
+    cutlass::reference::host::TensorFillRandomGaussian(tensor_input.host_view(), 0);
+    cutlass::reference::host::TensorFillRandomGaussian(tensor_filter.host_view(), 0);
+    cutlass::reference::host::TensorFill(tensor_output.host_view());
+    cutlass::reference::host::TensorFill(tensor_output_ref.host_view());
+    tensor_input.sync_device();
+    tensor_filter.sync_device();
+    tensor_output.sync_device();
+    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
+    cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
+    cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
+    tensor_output.sync_host();
+    bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
+    ASSERT_FALSE(passed);
+}
+
+TEST(ConvTest, ConvolutionFoward_32to4)
+{
+    cutlass::Tensor4DCoord input_size(1, 256, 256, 32);
+    cutlass::Tensor4DCoord filter_size(4, 3, 3, 32);
+    cutlass::Tensor4DCoord output_size(1, 256, 256, 4);
+    cutlass::Tensor4DCoord padding(1, 1, 1, 1);
+    cutlass::MatrixCoord stride(1, 1);
+    cutlass::MatrixCoord dilation(1, 1);
+
+    cutlass::HostTensor<InputType, cutlass::layout::TensorNHWC> tensor_input(input_size);
+    cutlass::HostTensor<FilterType, cutlass::layout::TensorNHWC> tensor_filter(filter_size);
+    cutlass::HostTensor<OutputType, cutlass::layout::TensorNHWC> tensor_output(output_size);
+    cutlass::HostTensor<OutputType, cutlass::layout::TensorNHWC> tensor_output_ref(output_size);
+    cutlass::reference::host::TensorFillRandomGaussian(tensor_input.host_view(), 0);
+    cutlass::reference::host::TensorFillRandomGaussian(tensor_filter.host_view(), 0);
+    cutlass::reference::host::TensorFill(tensor_output.host_view());
+    cutlass::reference::host::TensorFill(tensor_output_ref.host_view());
+    tensor_input.sync_device();
+    tensor_filter.sync_device();
+    tensor_output.sync_device();
+    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
+    cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
+    cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
+    tensor_output.sync_host();
+    bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
+    ASSERT_FALSE(passed);
+}
+
+TEST(ConvTest, ConvolutionFoward_32to32)
+{
+    cutlass::Tensor4DCoord input_size(1, 256, 256, 32);
+    cutlass::Tensor4DCoord filter_size(32, 3, 3, 32);
     cutlass::Tensor4DCoord output_size(1, 256, 256, 32);
     cutlass::Tensor4DCoord padding(1, 1, 1, 1);
     cutlass::MatrixCoord stride(1, 1);
@@ -93,10 +150,10 @@ TEST(ConvTest, ConvolutionFoward_1to32)
     ASSERT_FALSE(passed);
 }
 
-TEST(ConvTest, ConvolutionFoward_3to32)
+TEST(ConvTest, ConvolutionFoward_32to32_k_Split)
 {
-    cutlass::Tensor4DCoord input_size(1, 256, 256, 3);
-    cutlass::Tensor4DCoord filter_size(32, 3, 3, 3);
+    cutlass::Tensor4DCoord input_size(1, 256, 256, 32);
+    cutlass::Tensor4DCoord filter_size(32, 3, 3, 32);
     cutlass::Tensor4DCoord output_size(1, 256, 256, 32);
     cutlass::Tensor4DCoord padding(1, 1, 1, 1);
     cutlass::MatrixCoord stride(1, 1);
@@ -113,7 +170,7 @@ TEST(ConvTest, ConvolutionFoward_3to32)
     tensor_input.sync_device();
     tensor_filter.sync_device();
     tensor_output.sync_device();
-    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation);
+    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation, 2);
     cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
