@@ -4,6 +4,7 @@
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/layout/tensor.h"
 #include "cutlass/util/reference/host/convolution.h"
+#include "cutlass/conv/kernel/default_conv2d_dgrad.h"
 #include "cutlass/util/reference/host/tensor_compare.h"
 #include "cutlass/util/device_nhwc_padding.h"
 using InputType = cutlass::half_t;
@@ -13,8 +14,8 @@ using OutputType = cutlass::half_t;
 TEST(ConvTest, ConvolutionFoward_2to32)
 {
     cutlass::Tensor4DCoord input_size(1, 256, 256, 2);
-    cutlass::Tensor4DCoord filter_size(32, 3, 3, 2);
-    cutlass::Tensor4DCoord output_size(1, 256, 256, 32);
+    cutlass::Tensor4DCoord filter_size(2, 3, 3, 2);
+    cutlass::Tensor4DCoord output_size(1, 256, 256, 2);
     cutlass::Tensor4DCoord padding(1, 1, 1, 1);
     cutlass::MatrixCoord stride(1, 1);
     cutlass::MatrixCoord dilation(1, 1);
@@ -35,7 +36,7 @@ TEST(ConvTest, ConvolutionFoward_2to32)
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
-    ASSERT_FALSE(passed);
+    ASSERT_TRUE(passed);
 }
 
 TEST(ConvTest, ConvolutionFoward_4to32)
@@ -63,7 +64,7 @@ TEST(ConvTest, ConvolutionFoward_4to32)
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
-    ASSERT_FALSE(passed);
+    ASSERT_TRUE(passed);
 }
 
 TEST(ConvTest, ConvolutionFoward_32to2)
@@ -91,7 +92,7 @@ TEST(ConvTest, ConvolutionFoward_32to2)
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
-    ASSERT_FALSE(passed);
+    ASSERT_TRUE(passed);
 }
 
 TEST(ConvTest, ConvolutionFoward_32to4)
@@ -119,7 +120,7 @@ TEST(ConvTest, ConvolutionFoward_32to4)
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
-    ASSERT_FALSE(passed);
+    ASSERT_TRUE(passed);
 }
 
 TEST(ConvTest, ConvolutionFoward_32to32)
@@ -147,7 +148,7 @@ TEST(ConvTest, ConvolutionFoward_32to32)
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
-    ASSERT_FALSE(passed);
+    ASSERT_TRUE(passed);
 }
 
 TEST(ConvTest, ConvolutionFoward_32to32_k_Split)
@@ -170,10 +171,38 @@ TEST(ConvTest, ConvolutionFoward_32to32_k_Split)
     tensor_input.sync_device();
     tensor_filter.sync_device();
     tensor_output.sync_device();
-    ConvForward<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation, 2);
+    ConvForward<TBWarpSplitKShape, cutlass::conv::Mode::kConvolution>(tensor_input, tensor_filter, tensor_output, tensor_output, padding, stride, dilation, 2);
     cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
     cutlass::reference::host::Conv2dFprop(problem_size, tensor_input.host_ref(), tensor_filter.host_ref(), tensor_output_ref.host_ref(), tensor_output_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
     tensor_output.sync_host();
     bool passed = cutlass::reference::host::TensorEquals(tensor_output.host_view(), tensor_output_ref.host_view());
-    ASSERT_FALSE(passed);
+    ASSERT_TRUE(passed);
+}
+
+TEST(ConvTest, ConvolutionBackward_2to32)
+{
+    cutlass::Tensor4DCoord input_size(1, 256, 256, 2);
+    cutlass::Tensor4DCoord filter_size(32, 3, 3, 2);
+    cutlass::Tensor4DCoord output_size(1, 256, 256, 32);
+    cutlass::Tensor4DCoord padding(1, 1, 1, 1);
+    cutlass::MatrixCoord stride(1, 1);
+    cutlass::MatrixCoord dilation(1, 1);
+
+    cutlass::HostTensor<InputType, cutlass::layout::TensorNHWC> tensor_input(input_size);
+    cutlass::HostTensor<FilterType, cutlass::layout::TensorNHWC> tensor_filter(filter_size);
+    cutlass::HostTensor<OutputType, cutlass::layout::TensorNHWC> tensor_output(output_size);
+    cutlass::HostTensor<OutputType, cutlass::layout::TensorNHWC> tensor_input_ref(input_size);
+    cutlass::reference::host::TensorFillRandomGaussian(tensor_input.host_view(), 0);
+    cutlass::reference::host::TensorFillRandomGaussian(tensor_filter.host_view(), 0);
+    cutlass::reference::host::TensorFill(tensor_output.host_view());
+    cutlass::reference::host::TensorFill(tensor_input_ref.host_view());
+    tensor_input.sync_device();
+    tensor_filter.sync_device();
+    tensor_output.sync_device();
+    ConvBackwardData<TBWarpShape, cutlass::conv::Mode::kConvolution>(tensor_output, tensor_filter, tensor_input, tensor_input, padding, stride, dilation, 1);
+    cutlass::conv::Conv2dProblemSize problem_size(input_size, filter_size, padding, stride, dilation, output_size, cutlass::conv::Mode::kConvolution, 1);
+    cutlass::reference::host::Conv2dDgrad(problem_size, tensor_output.host_ref(), tensor_filter.host_ref(), tensor_input_ref.host_ref(), tensor_input_ref.host_ref(), TypeCompute(1.0), TypeCompute(0.0));
+    tensor_input.sync_host();
+    bool passed = cutlass::reference::host::TensorEquals(tensor_input.host_view(), tensor_input_ref.host_view());
+    ASSERT_TRUE(passed);
 }
