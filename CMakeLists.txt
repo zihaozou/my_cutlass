@@ -104,7 +104,6 @@ target_link_libraries(
 target_compile_options(unit_tests PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_NVCC_FLAGS}>)
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
-
 # add_executable(performance benchmarks/benchmark.cu)
 # target_link_libraries(
 #   performance

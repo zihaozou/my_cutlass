@@ -1,6 +1,10 @@
 #pragma once
 #include <iostream>
+#include <cuda_runtime.h>
+#include <cuda.h>
+#include <stdexcept>
 #include "cutlass/cutlass.h"
+#include "cutlass/tensor_ref.h"
 #include "cutlass/arch/arch.h"
 #include "cutlass/gemm/device/gemm.h"
 #include "cutlass/conv/kernel/default_conv2d_fprop.h"
@@ -280,6 +284,14 @@ void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC
 }
 
 #define CHECK_CHANNEL_(c) ((c) % 8 == 0) ? 0 : (((c) % 4) ? 1 : (((c) % 2) ? 2 : 3))
+constexpr uint choose_op(uint x, uint y)
+{
+    return (1 << (CHECK_CHANNEL_(x) + 4)) | (1 << (CHECK_CHANNEL_(y)));
+}
+template <cutlass::conv::Operator Op, cutlass::conv::Mode Mode, typename Config, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
+class ConvDispatcher
+{
+
 #define RUN_CONV_DIFF_CHAN_FORWARD(x)                                                               \
     typename Conv##x##F::Arguments args{                                                            \
         problem_size,                                                                               \
@@ -290,59 +302,6 @@ void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC
         {TypeCompute(1), TypeCompute(0)},                                                           \
         (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
     ConvImpl<Conv##x##F>(args, tensor_c, tensor_d, stream)
-
-constexpr uint choose_op(uint x, uint y)
-{
-    return (1 << (CHECK_CHANNEL_(x) + 4)) | (1 << (CHECK_CHANNEL_(y)));
-}
-template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
-void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
-{
-    using Conv22F = Conv2to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv24F = Conv2to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv28F = Conv2to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv42F = Conv4to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv44F = Conv4to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv48F = Conv4to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv82F = Conv8to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv84F = Conv8to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-    using Conv88F = Conv8to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
-
-    static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
-    static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
-    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
-
-    cutlass::conv::Conv2dProblemSize problem_size(
-        tensor_a.extent(),
-        tensor_b.extent(),
-        padding,
-        conv_stride,
-        conv_dilation,
-        tensor_d.extent(),
-        mode,
-        split_k);
-    std::unordered_map<uint, std::function<void()>> conv_map{
-        {choose_op(8, 8), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(88); }},
-        {choose_op(8, 4), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(84); }},
-        {choose_op(8, 2), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(82); }},
-        {choose_op(4, 8), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(48); }},
-        {choose_op(4, 4), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(44); }},
-        {choose_op(4, 2), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(42); }},
-        {choose_op(2, 8), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(28); }},
-        {choose_op(2, 4), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(24); }},
-        {choose_op(2, 2), [&]
-         { RUN_CONV_DIFF_CHAN_FORWARD(22); }}};
-    conv_map[choose_op(tensor_b.extent().c(), tensor_b.extent().n())]();
-}
-
 #define RUN_CONV_DIFF_CHAN_BACKWARD_DATA(x, stride)                                                 \
     typename Conv##x##BD##stride ::Arguments args{                                                  \
         problem_size,                                                                               \
@@ -353,10 +312,31 @@ void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTen
         {TypeCompute(1), TypeCompute(0)},                                                           \
         (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
     ConvImpl<Conv##x##BD##stride>(args, tensor_c, tensor_d, stream)
+#define RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(x)                                                       \
+    typename Conv##x##BW::Arguments args{                                                           \
+        problem_size,                                                                               \
+        tensor_a.device_ref(),                                                                      \
+        tensor_b.device_ref(),                                                                      \
+        tensor_c.device_ref(),                                                                      \
+        tensor_d.device_ref(),                                                                      \
+        {TypeCompute(1), TypeCompute(0)},                                                           \
+        (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
+    ConvImpl<Conv##x##BW>(args, tensor_c, tensor_d, stream)
+#define MAKE_LAMBDA(name, ...)                                                                                                                                                                                                                                                       \
+    [](cutlass::conv::Conv2dProblemSize &problem_size, cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, int split_k, cudaStream_t stream) \
+    {                                                                                                                                                                                                                                                                                \
+        name(__VA_ARGS__);                                                                                                                                                                                                                                                           \
+    }
 
-template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
-void ConvBackwardData(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
-{
+    using Conv22F = Conv2to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv24F = Conv2to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv28F = Conv2to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv42F = Conv4to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv44F = Conv4to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv48F = Conv4to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv82F = Conv8to2ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv84F = Conv8to4ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv88F = Conv8to8ForwardOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
     using Conv22BDS = Conv2to2BackwardDataOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config, cutlass::conv::StrideSupport::kStrided>;
     using Conv24BDS = Conv2to4BackwardDataOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config, cutlass::conv::StrideSupport::kStrided>;
     using Conv28BDS = Conv2to8BackwardDataOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config, cutlass::conv::StrideSupport::kStrided>;
@@ -375,80 +355,6 @@ void ConvBackwardData(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::Ho
     using Conv82BDU = Conv8to2BackwardDataOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config, cutlass::conv::StrideSupport::kUnity>;
     using Conv84BDU = Conv8to4BackwardDataOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config, cutlass::conv::StrideSupport::kUnity>;
     using Conv88BDU = Conv8to8BackwardDataOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config, cutlass::conv::StrideSupport::kUnity>;
-    static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
-    static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
-    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
-    cutlass::conv::Conv2dProblemSize problem_size(
-        tensor_d.extent(),
-        tensor_b.extent(),
-        padding,
-        conv_stride,
-        conv_dilation,
-        tensor_a.extent(),
-        mode,
-        split_k);
-    if (conv_stride.row() == 1 && conv_stride.column() == 1)
-    {
-        std::unordered_map<uint, std::function<void()>>
-            conv_map{
-                {choose_op(8, 8), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(88, U); }},
-                {choose_op(8, 4), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(84, U); }},
-                {choose_op(8, 2), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(82, U); }},
-                {choose_op(4, 8), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(48, U); }},
-                {choose_op(4, 4), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(44, U); }},
-                {choose_op(4, 2), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(42, U); }},
-                {choose_op(2, 8), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(28, U); }},
-                {choose_op(2, 4), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(24, U); }},
-                {choose_op(2, 2), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(22, U); }}};
-        conv_map[choose_op(tensor_b.extent().n(), tensor_b.extent().c())]();
-    }
-    else
-    {
-        std::unordered_map<uint, std::function<void()>> conv_map{
-            {choose_op(8, 8), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(88, S); }},
-            {choose_op(8, 4), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(84, S); }},
-            {choose_op(8, 2), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(82, S); }},
-            {choose_op(4, 8), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(48, S); }},
-            {choose_op(4, 4), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(44, S); }},
-            {choose_op(4, 2), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(42, S); }},
-            {choose_op(2, 8), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(28, S); }},
-            {choose_op(2, 4), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(24, S); }},
-            {choose_op(2, 2), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(22, S); }}};
-        conv_map[choose_op(tensor_b.extent().n(), tensor_b.extent().c())]();
-    }
-}
-#define RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(x)                                                       \
-    typename Conv##x##BW::Arguments args{                                                           \
-        problem_size,                                                                               \
-        tensor_a.device_ref(),                                                                      \
-        tensor_b.device_ref(),                                                                      \
-        tensor_c.device_ref(),                                                                      \
-        tensor_d.device_ref(),                                                                      \
-        {TypeCompute(1), TypeCompute(0)},                                                           \
-        (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
-    ConvImpl<Conv##x##BW>(args, tensor_c, tensor_d, stream)
-
-template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
-void ConvBackwardWeight(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
-{
     using Conv22BW = Conv2to2BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
     using Conv24BW = Conv2to4BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
     using Conv28BW = Conv2to8BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
@@ -458,9 +364,136 @@ void ConvBackwardWeight(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::
     using Conv82BW = Conv8to2BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
     using Conv84BW = Conv8to4BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
     using Conv88BW = Conv8to8BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+
+public:
+    ConvDispatcher() {}
+
+    virtual ~ConvDispatcher() {}
+
+    void operator()(cutlass::conv::Conv2dProblemSize &problem_size, cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, int split_k, cudaStream_t stream, cutlass::MatrixCoord &conv_stride)
+    {
+        if constexpr (Op == cutlass::conv::Operator::kFprop)
+        {
+            const std::unordered_map<uint, std::function<void(cutlass::conv::Conv2dProblemSize &, cutlass::HostTensor<TypeA, LayoutA> &, cutlass::HostTensor<TypeB, LayoutB> &, cutlass::HostTensor<TypeC, LayoutC> &, cutlass::HostTensor<TypeD, LayoutD> &, int, cudaStream_t)>> conv_map{
+                {choose_op(8, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 88)},
+                {choose_op(8, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 84)},
+                {choose_op(8, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 82)},
+                {choose_op(4, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 48)},
+                {choose_op(4, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 44)},
+                {choose_op(4, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 42)},
+                {choose_op(2, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 28)},
+                {choose_op(2, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 24)},
+                {choose_op(2, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_FORWARD, 22)}};
+            auto runner = conv_map.find(choose_op(tensor_b.extent().c(), tensor_b.extent().n()));
+            if (runner != conv_map.end())
+                (*runner).second(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream);
+        }
+        else if constexpr (Op == cutlass::conv::Operator::kDgrad)
+        {
+            if (conv_stride.row() == 1 && conv_stride.column() == 1)
+            {
+                const std::unordered_map<uint, std::function<void(cutlass::conv::Conv2dProblemSize &, cutlass::HostTensor<TypeA, LayoutA> &, cutlass::HostTensor<TypeB, LayoutB> &, cutlass::HostTensor<TypeC, LayoutC> &, cutlass::HostTensor<TypeD, LayoutD> &, int, cudaStream_t)>>
+                    conv_map{
+                        {choose_op(8, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 88, U)},
+                        {choose_op(8, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 84, U)},
+                        {choose_op(8, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 82, U)},
+                        {choose_op(4, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 48, U)},
+                        {choose_op(4, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 44, U)},
+                        {choose_op(4, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 42, U)},
+                        {choose_op(2, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 28, U)},
+                        {choose_op(2, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 24, U)},
+                        {choose_op(2, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 22, U)}};
+                auto runner = conv_map.find(choose_op(tensor_b.extent().n(), tensor_b.extent().c()));
+                if (runner != conv_map.end())
+                    (*runner).second(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream);
+            }
+            else
+            {
+                const std::unordered_map<uint, std::function<void(cutlass::conv::Conv2dProblemSize &, cutlass::HostTensor<TypeA, LayoutA> &, cutlass::HostTensor<TypeB, LayoutB> &, cutlass::HostTensor<TypeC, LayoutC> &, cutlass::HostTensor<TypeD, LayoutD> &, int, cudaStream_t)>>
+                    conv_map{
+                        {choose_op(8, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 88, U)},
+                        {choose_op(8, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 84, U)},
+                        {choose_op(8, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 82, U)},
+                        {choose_op(4, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 48, U)},
+                        {choose_op(4, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 44, U)},
+                        {choose_op(4, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 42, U)},
+                        {choose_op(2, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 28, U)},
+                        {choose_op(2, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 24, U)},
+                        {choose_op(2, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_DATA, 22, U)}};
+                auto runner = conv_map.find(choose_op(tensor_b.extent().n(), tensor_b.extent().c()));
+                if (runner != conv_map.end())
+                    (*runner).second(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream);
+            }
+        }
+        else
+        {
+            const std::unordered_map<uint, std::function<void()>> conv_map{
+                {choose_op(8, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 88)},
+                {choose_op(8, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 84)},
+                {choose_op(8, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 82)},
+                {choose_op(4, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 48)},
+                {choose_op(4, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 44)},
+                {choose_op(4, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 42)},
+                {choose_op(2, 8), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 28)},
+                {choose_op(2, 4), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 24)},
+                {choose_op(2, 2), MAKE_LAMBDA(RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT, 22)}};
+            auto runner = conv_map.find(choose_op(tensor_d.extent().n(), tensor_d.extent().c()));
+            if (runner != conv_map.end())
+                (*runner).second(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream);
+        }
+    }
+};
+
+template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
+void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
+{
     static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
     static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
     static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
+    if ((CHECK_CHANNEL_(tensor_b.extent().n()) == 3) && (CHECK_CHANNEL_(tensor_b.extent().c()) == 3))
+        throw std::invalid_argument("Convolution channel in & out must be multiple of 2 or 4 or 8");
+    cutlass::conv::Conv2dProblemSize problem_size(
+        tensor_a.extent(),
+        tensor_b.extent(),
+        padding,
+        conv_stride,
+        conv_dilation,
+        tensor_d.extent(),
+        mode,
+        split_k);
+    const ConvDispatcher<cutlass::conv::Operator::kFprop, mode, Config, TypeA, TypeB, TypeC, TypeD, LayoutA, LayoutB, LayoutC, LayoutD> conv_dispatcher;
+    conv_dispatcher(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream, conv_stride);
+}
+
+template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
+void ConvBackwardData(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
+{
+    static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
+    static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
+    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
+    if ((CHECK_CHANNEL_(tensor_b.extent().n()) == 3) && (CHECK_CHANNEL_(tensor_b.extent().c()) == 3))
+        throw std::invalid_argument("Convolution channel in & out must be multiple of 2 or 4 or 8");
+    cutlass::conv::Conv2dProblemSize problem_size(
+        tensor_d.extent(),
+        tensor_b.extent(),
+        padding,
+        conv_stride,
+        conv_dilation,
+        tensor_a.extent(),
+        mode,
+        split_k);
+    const ConvDispatcher<cutlass::conv::Operator::kDgrad, mode, Config, TypeA, TypeB, TypeC, TypeD, LayoutA, LayoutB, LayoutC, LayoutD> conv_dispatcher;
+    conv_dispatcher(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream, conv_stride);
+}
+
+template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
+void ConvBackwardWeight(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
+{
+    static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
+    static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
+    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
+    if ((CHECK_CHANNEL_(tensor_d.extent().n()) == 3) && (CHECK_CHANNEL_(tensor_d.extent().c()) == 3))
+        throw std::invalid_argument("Convolution channel in & out must be multiple of 2 or 4 or 8");
     cutlass::conv::Conv2dProblemSize problem_size(
         tensor_b.extent(),
         tensor_d.extent(),
@@ -470,24 +503,6 @@ void ConvBackwardWeight(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::
         tensor_a.extent(),
         mode,
         split_k);
-    std::unordered_map<uint, std::function<void()>> conv_map{
-        {choose_op(8, 8), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(88); }},
-        {choose_op(8, 4), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(84); }},
-        {choose_op(8, 2), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(82); }},
-        {choose_op(4, 8), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(48); }},
-        {choose_op(4, 4), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(44); }},
-        {choose_op(4, 2), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(42); }},
-        {choose_op(2, 8), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(28); }},
-        {choose_op(2, 4), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(24); }},
-        {choose_op(2, 2), [&]
-         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(22); }}};
-    conv_map[choose_op(tensor_d.extent().n(), tensor_d.extent().c())]();
+    const ConvDispatcher<cutlass::conv::Operator::kWgrad, mode, Config, TypeA, TypeB, TypeC, TypeD, LayoutA, LayoutB, LayoutC, LayoutD> conv_dispatcher;
+    conv_dispatcher(problem_size, tensor_a, tensor_b, tensor_c, tensor_d, split_k, stream, conv_stride);
 }

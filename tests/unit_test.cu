@@ -7,10 +7,11 @@
 #include "cutlass/conv/kernel/default_conv2d_dgrad.h"
 #include "cutlass/util/reference/host/tensor_compare.h"
 #include "cutlass/util/device_nhwc_padding.h"
+#include <time.h>
 using ActivationType = cutlass::half_t;
 using FilterType = cutlass::half_t;
 using OutputType = cutlass::half_t;
-static int size = 8;
+static int size = 32;
 TEST(ConvTest, ConvolutionFoward_2to32)
 {
     cutlass::Tensor4DCoord activation_size(1, size, size, 2);

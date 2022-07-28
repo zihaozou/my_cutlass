@@ -1,4 +1,3 @@
 [submodule "dependencies/cutlass"]
 	path = dependencies/cutlass
-	url = https://github.com/NVIDIA/cutlass.git
-	branch = master
+	url = https://github.com/zihaozou/cutlass.git
