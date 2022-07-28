@@ -5,6 +5,7 @@
 #include "cutlass/gemm/device/gemm.h"
 #include "cutlass/conv/kernel/default_conv2d_fprop.h"
 #include "cutlass/conv/kernel/default_conv2d_dgrad.h"
+#include "cutlass/conv/kernel/default_conv2d_wgrad.h"
 #include "cutlass/conv/device/implicit_gemm_convolution.h"
 #include "cutlass/conv/threadblock/threadblock_swizzle.h"
 #include "cutlass/conv/conv2d_problem_size.h"
@@ -104,17 +105,17 @@ using ConvNtoMforwardKernel = typename cutlass::conv::kernel::DefaultConv2dFprop
     cutlass::conv::StrideSupport::kStrided,
     InputAlignment, InputAlignment>::Kernel;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv2to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+using Conv2to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv2to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+using Conv2to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv2to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
+using Conv2to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv4to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+using Conv4to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv4to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+using Conv4to4ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
-using Conv4to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
+using Conv4to2ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
 using Conv8to8ForwardOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMforwardKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value>>;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
@@ -147,22 +148,22 @@ using ConvNtoMBackwardDataKernel = typename cutlass::conv::kernel::DefaultConv2d
     InputAlignment,
     OutputAlignment>::Kernel;
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
-using Conv2to2BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value / 4, Stride>>;
+using Conv2to2BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value / 4, Stride>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
-using Conv2to4BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value / 2, Stride>>;
+using Conv2to4BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value / 2, Stride>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
-using Conv2to8BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 2, 128 / cutlass::sizeof_bits<TypeC>::value, Stride>>;
+using Conv2to8BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value, Stride>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
-using Conv4to2BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value / 4, Stride>>;
+using Conv4to2BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value / 4, Stride>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
-using Conv4to4BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value / 2, Stride>>;
+using Conv4to4BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value / 2, Stride>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
-using Conv4to8BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 4, 128 / cutlass::sizeof_bits<TypeC>::value, Stride>>;
+using Conv4to8BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value, Stride>>;
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
 using Conv8to2BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 4, Stride>>;
@@ -172,6 +173,50 @@ using Conv8to4BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<Co
 
 template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, cutlass::conv::StrideSupport Stride>
 using Conv8to8BackwardDataOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardDataKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value, Stride>>;
+
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig, int InputAlignment, int OutputAlignment>
+using ConvNtoMBackwardWeightKernel = typename cutlass::conv::kernel::DefaultConv2dWgrad<
+    TypeA,
+    LayoutA,
+    TypeB, LayoutB,
+    TypeC, LayoutC,
+    TypeAccumulator,
+    MMAOp<TypeA>,
+    SmArch,
+    typename TBWarpShapeConfig::kThreadBlock,
+    typename TBWarpShapeConfig::kWarp,
+    ShapeMMAOp<TypeA>,
+    cutlass::epilogue::thread::LinearCombination<
+        TypeC,
+        OutputAlignment,
+        TypeAccumulator,
+        TypeCompute>,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<1>,
+    2,
+    cutlass::arch::OpMultiplyAdd,
+    cutlass::conv::IteratorAlgorithm::kOptimized,
+    cutlass::conv::StrideSupport::kStrided,
+    InputAlignment,
+    InputAlignment>::Kernel;
+
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv2to8BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv2to4BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv2to2BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 4, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv4to8BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv4to4BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv4to2BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value / 2, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv8to8BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv8to4BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 2>>;
+template <typename TypeA, typename TypeB, typename TypeC, typename LayoutA, typename LayoutB, typename LayoutC, typename TBWarpShapeConfig>
+using Conv8to2BackwardWeightOp = cutlass::conv::device::ImplicitGemmConvolution<ConvNtoMBackwardWeightKernel<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, TBWarpShapeConfig, 128 / cutlass::sizeof_bits<TypeA>::value, 128 / cutlass::sizeof_bits<TypeC>::value / 4>>;
 
 template <typename Type, typename Layout>
 cutlass::HostTensor<Type, Layout> PadChannel(cutlass::HostTensor<Type, Layout> &src, int pad_channels, cudaStream_t stream = nullptr)
@@ -234,7 +279,7 @@ void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC
     }
 }
 
-#define CHECK_CHANNEL_(c) ((c) % 8 == 0) ? 0 : (((c) == 4) ? 1 : (((c) == 2) ? 2 : 3))
+#define CHECK_CHANNEL_(c) ((c) % 8 == 0) ? 0 : (((c) % 4) ? 1 : (((c) % 2) ? 2 : 3))
 #define RUN_CONV_DIFF_CHAN_FORWARD(x)                                                               \
     typename Conv##x##F::Arguments args{                                                            \
         problem_size,                                                                               \
@@ -245,7 +290,7 @@ void ConvImpl(typename Conv::Arguments &args, cutlass::HostTensor<TypeC, LayoutC
         {TypeCompute(1), TypeCompute(0)},                                                           \
         (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
     ConvImpl<Conv##x##F>(args, tensor_c, tensor_d, stream)
-int i = 1;
+
 constexpr uint choose_op(uint x, uint y)
 {
     return (1 << (CHECK_CHANNEL_(x) + 4)) | (1 << (CHECK_CHANNEL_(y)));
@@ -298,7 +343,7 @@ void ConvForward(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTen
     conv_map[choose_op(tensor_b.extent().c(), tensor_b.extent().n())]();
 }
 
-#define RUN_CONV_DIFF_CHAN_BACKWARD(x, stride)                                                      \
+#define RUN_CONV_DIFF_CHAN_BACKWARD_DATA(x, stride)                                                 \
     typename Conv##x##BD##stride ::Arguments args{                                                  \
         problem_size,                                                                               \
         tensor_a.device_ref(),                                                                      \
@@ -347,46 +392,102 @@ void ConvBackwardData(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::Ho
         std::unordered_map<uint, std::function<void()>>
             conv_map{
                 {choose_op(8, 8), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(88, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(88, U); }},
                 {choose_op(8, 4), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(84, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(84, U); }},
                 {choose_op(8, 2), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(82, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(82, U); }},
                 {choose_op(4, 8), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(48, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(48, U); }},
                 {choose_op(4, 4), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(44, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(44, U); }},
                 {choose_op(4, 2), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(42, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(42, U); }},
                 {choose_op(2, 8), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(28, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(28, U); }},
                 {choose_op(2, 4), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(24, U); }},
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(24, U); }},
                 {choose_op(2, 2), [&]
-                 { RUN_CONV_DIFF_CHAN_BACKWARD(22, U); }}};
+                 { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(22, U); }}};
         conv_map[choose_op(tensor_b.extent().n(), tensor_b.extent().c())]();
     }
     else
     {
         std::unordered_map<uint, std::function<void()>> conv_map{
             {choose_op(8, 8), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(88, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(88, S); }},
             {choose_op(8, 4), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(84, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(84, S); }},
             {choose_op(8, 2), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(82, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(82, S); }},
             {choose_op(4, 8), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(48, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(48, S); }},
             {choose_op(4, 4), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(44, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(44, S); }},
             {choose_op(4, 2), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(42, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(42, S); }},
             {choose_op(2, 8), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(28, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(28, S); }},
             {choose_op(2, 4), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(24, S); }},
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(24, S); }},
             {choose_op(2, 2), [&]
-             { RUN_CONV_DIFF_CHAN_BACKWARD(22, S); }}};
+             { RUN_CONV_DIFF_CHAN_BACKWARD_DATA(22, S); }}};
         conv_map[choose_op(tensor_b.extent().n(), tensor_b.extent().c())]();
     }
+}
+#define RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(x)                                                       \
+    typename Conv##x##BW::Arguments args{                                                           \
+        problem_size,                                                                               \
+        tensor_a.device_ref(),                                                                      \
+        tensor_b.device_ref(),                                                                      \
+        tensor_c.device_ref(),                                                                      \
+        tensor_d.device_ref(),                                                                      \
+        {TypeCompute(1), TypeCompute(0)},                                                           \
+        (split_k > 1) ? cutlass::conv::SplitKMode::kParallel : cutlass::conv::SplitKMode::kSerial}; \
+    ConvImpl<Conv##x##BW>(args, tensor_c, tensor_d, stream)
+
+template <typename Config, cutlass::conv::Mode mode, typename TypeA, typename TypeB, typename TypeC, typename TypeD, typename LayoutA, typename LayoutB, typename LayoutC, typename LayoutD>
+void ConvBackwardWeight(cutlass::HostTensor<TypeA, LayoutA> &tensor_a, cutlass::HostTensor<TypeB, LayoutB> &tensor_b, cutlass::HostTensor<TypeC, LayoutC> &tensor_c, cutlass::HostTensor<TypeD, LayoutD> &tensor_d, cutlass::Tensor4DCoord &padding, cutlass::MatrixCoord &conv_stride, cutlass::MatrixCoord &conv_dilation, int split_k = 1, cudaStream_t stream = nullptr)
+{
+    using Conv22BW = Conv2to2BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv24BW = Conv2to4BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv28BW = Conv2to8BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv42BW = Conv4to2BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv44BW = Conv4to4BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv48BW = Conv4to8BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv82BW = Conv8to2BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv84BW = Conv8to4BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    using Conv88BW = Conv8to8BackwardWeightOp<TypeA, TypeB, TypeC, LayoutA, LayoutB, LayoutC, Config>;
+    static_assert(std::is_same<TypeA, TypeB>::value, "Type of A and B must be equal");
+    static_assert(std::is_same<TypeC, TypeD>::value, "Type of C and D must be equal");
+    static_assert(std::is_same<LayoutC, LayoutD>::value, "Layout C and D must be equal");
+    cutlass::conv::Conv2dProblemSize problem_size(
+        tensor_b.extent(),
+        tensor_d.extent(),
+        padding,
+        conv_stride,
+        conv_dilation,
+        tensor_a.extent(),
+        mode,
+        split_k);
+    std::unordered_map<uint, std::function<void()>> conv_map{
+        {choose_op(8, 8), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(88); }},
+        {choose_op(8, 4), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(84); }},
+        {choose_op(8, 2), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(82); }},
+        {choose_op(4, 8), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(48); }},
+        {choose_op(4, 4), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(44); }},
+        {choose_op(4, 2), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(42); }},
+        {choose_op(2, 8), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(28); }},
+        {choose_op(2, 4), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(24); }},
+        {choose_op(2, 2), [&]
+         { RUN_CONV_DIFF_CHAN_BACKWARD_WEIGHT(22); }}};
+    conv_map[choose_op(tensor_d.extent().n(), tensor_d.extent().c())]();
 }
